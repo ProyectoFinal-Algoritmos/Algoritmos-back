@@ -34,6 +34,8 @@ app.add_middleware(
 )
 
 
+# ============== ENDPOINTS API ==============
+
 @app.post("/upload-graph")
 async def upload_graph(file: UploadFile = File(...)):
     if not file.filename.endswith(".osm"):
@@ -106,6 +108,18 @@ def run_held_karp():
                 status_code=400, detail="Missing matrix or selected nodes."
             )
 
+        # límite de puntos para evitar explosión de memoria/tiempo
+        MAX_DYNAMIC_POINTS = 18
+        if len(node_ids) > MAX_DYNAMIC_POINTS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Programación dinámica (Held-Karp) solo se permite hasta "
+                    f"{MAX_DYNAMIC_POINTS} puntos (actual: {len(node_ids)}). "
+                    f"Use Greedy para más puntos."
+                ),
+            )
+
         result = solve_tsp_dynamic_programming(matrix.distances)
 
         real_path = map_path_indices_to_ids(result.path, node_ids)
@@ -122,6 +136,9 @@ def run_held_karp():
             "fullPath": full_path,  # para dibujar en el mapa
         }
 
+    except HTTPException:
+        # dejamos pasar los 400 que nosotros mismos lanzamos
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -137,6 +154,13 @@ def run_brute_force():
         if not matrix or not node_ids:
             raise HTTPException(
                 status_code=400, detail="Missing matrix or selected nodes."
+            )
+
+        # seguridad: limitar número de puntos para fuerza bruta
+        if len(node_ids) > 9:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Brute force solo se permite hasta 9 puntos (actual: {len(node_ids)}).",
             )
 
         result = solve_tsp_brute_force(matrix.distances)
@@ -155,6 +179,8 @@ def run_brute_force():
             "fullPath": full_path,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -193,9 +219,7 @@ def run_greedy():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ---------------------------
-# FUNCIONES DE PRUEBA POR CONSOLA
-# ---------------------------
+# ============== FUNCIONES DE PRUEBA POR CONSOLA ==============
 
 def load_points_to_visit(file_path: str) -> List[Tuple[float, float]]:
     """
@@ -216,8 +240,7 @@ def load_points_to_visit(file_path: str) -> List[Tuple[float, float]]:
 
 
 def main():
-    # 1. Cargar grafo desde archivo .osm local
-    osm_path = "data/chapinero.osm"  # ajusta el nombre de archivo si es otro
+    osm_path = "data/chapinero.osm"  # ajusta si tu archivo se llama distinto
     with open(osm_path, "rb") as f:
         load_graph_from_file(f)
 
@@ -225,7 +248,7 @@ def main():
     print(f"Grafo inicial: {G.number_of_nodes()} nodos, {G.number_of_edges()} aristas")
 
     # 2. Cargar puntos desde archivo txt local
-    file_path = "data/points.txt"  # ajusta si tu archivo se llama diferente
+    file_path = "data/points.txt"
     points = load_points_to_visit(file_path)
     print(f"Leídos {len(points)} puntos desde archivo.")
 
@@ -237,7 +260,18 @@ def main():
         f"Grafo actualizado: {G.number_of_nodes()} nodos, {G.number_of_edges()} aristas"
     )
 
-    # 4. Crear matriz de distancias según los nodos que se quieren visitar
+    # Limitar número de puntos para pruebas (para que no explote brute force)
+    MAX_POINTS_FOR_TEST = 8
+    if len(final_node_ids) > MAX_POINTS_FOR_TEST:
+        print(
+            f"Hay {len(final_node_ids)} puntos, recortando a los primeros {MAX_POINTS_FOR_TEST} para pruebas."
+        )
+        final_node_ids = final_node_ids[:MAX_POINTS_FOR_TEST]
+
+    n = len(final_node_ids)
+    print(f"Usando {n} puntos para construir la matriz y probar TSP.")
+
+    # 4. Crear matriz de distancias
     result_matrix = build_distance_matrix_with_paths(G, final_node_ids)
 
     print("\nMatriz de distancias:")
@@ -248,55 +282,70 @@ def main():
         ]
         print(pretty)
 
-    print("\nMatriz de caminos reales (solo i != j):")
-    for i in range(len(result_matrix.paths)):
-        for j in range(len(result_matrix.paths)):
+    # Mostrar solo algunos caminos ejemplo
+    print("\nEjemplos de caminos reales (primeros hasta 3 puntos):")
+    limit = min(3, len(result_matrix.paths))
+    for i in range(limit):
+        for j in range(limit):
             if i != j:
                 print(
                     f"De {final_node_ids[i]} a {final_node_ids[j]}: {result_matrix.paths[i][j]}"
                 )
 
-    # 5. Ejecutar TSP por fuerza bruta
-    result_brute_force = solve_tsp_brute_force(result_matrix.distances)
+    # 5. Ejecutar TSP por fuerza bruta (solo si n es pequeño)
+    if n <= 9:
+        result_brute_force = solve_tsp_brute_force(result_matrix.distances)
 
-    print("\n=== Fuerza bruta ===")
-    print("Nombre del algoritmo usado:")
-    print(result_brute_force.algorithmName)
-    print("Ruta óptima (índices en matriz):")
-    print(result_brute_force.path)
-    print(f"Costo total: {result_brute_force.total_cost:.2f} metros")
-    print(f"Tiempo de ejecución: {result_brute_force.execution_time:.4f} segundos")
+        print("\n=== Fuerza bruta ===")
+        print("Nombre del algoritmo usado:")
+        print(result_brute_force.algorithmName)
+        print("Ruta óptima (índices en matriz):")
+        print(result_brute_force.path)
+        print(f"Costo total: {result_brute_force.total_cost:.2f} metros")
+        print(f"Tiempo de ejecución: {result_brute_force.execution_time:.4f} segundos")
 
-    id_path = map_path_indices_to_ids(result_brute_force.path, final_node_ids)
-    print("Ruta como IDs reales:")
-    print(id_path)
+        id_path = map_path_indices_to_ids(result_brute_force.path, final_node_ids)
+        print("Ruta como IDs reales:")
+        print(id_path)
 
-    full_real_path = reconstruct_full_path(
-        result_brute_force.path, result_matrix.paths
-    )
-    print("Ruta completa con nodos intermedios incluidos:")
-    print(full_real_path)
+        full_real_path = reconstruct_full_path(
+            result_brute_force.path, result_matrix.paths
+        )
+        print("Ruta completa con nodos intermedios incluidos:")
+        print(full_real_path)
+    else:
+        print(
+            f"\nSaltando Fuerza bruta porque hay {n} puntos (máximo recomendado: 9)."
+        )
 
     # 6. Ejecutar el algoritmo de programación dinámica (Held-Karp)
-    result_dynamic = solve_tsp_dynamic_programming(result_matrix.distances)
+    MAX_DYNAMIC_POINTS = 18
+    if n <= MAX_DYNAMIC_POINTS:
+        result_dynamic = solve_tsp_dynamic_programming(result_matrix.distances)
 
-    print("\n=== Programación Dinámica (Held-Karp) ===")
-    print("Nombre del algoritmo usado:")
-    print(result_dynamic.algorithmName)
-    print("Ruta óptima (índices en matriz):")
-    print(result_dynamic.path)
-    print(f"Costo total: {result_dynamic.total_cost:.2f} metros")
-    print(f"Tiempo de ejecución: {result_dynamic.execution_time:.4f} segundos")
+        print("\n=== Programación Dinámica (Held-Karp) ===")
+        print("Nombre del algoritmo usado:")
+        print(result_dynamic.algorithmName)
+        print("Ruta óptima (índices en matriz):")
+        print(result_dynamic.path)
+        print(f"Costo total: {result_dynamic.total_cost:.2f} metros")
+        print(
+            f"Tiempo de ejecución: {result_dynamic.execution_time:.4f} segundos"
+        )
 
-    id_path_dynamic = map_path_indices_to_ids(result_dynamic.path, final_node_ids)
-    print("Ruta como IDs reales:")
-    print(id_path_dynamic)
+        id_path_dynamic = map_path_indices_to_ids(result_dynamic.path, final_node_ids)
+        print("Ruta como IDs reales:")
+        print(id_path_dynamic)
 
-    full_real_path_dynamic = reconstruct_full_path(
-        result_dynamic.path, result_matrix.paths
-    )
-    print("Ruta completa con nodos intermedios incluidos:")
-    print(full_real_path_dynamic)
+        full_real_path_dynamic = reconstruct_full_path(
+            result_dynamic.path, result_matrix.paths
+        )
+        print("Ruta completa con nodos intermedios incluidos:")
+        print(full_real_path_dynamic)
+    else:
+        print(
+            f"\nSaltando Programación Dinámica porque hay {n} puntos (máximo recomendado: {MAX_DYNAMIC_POINTS})."
+        )
 
 
 if __name__ == "__main__":
