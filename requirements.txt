@@ -3,7 +3,6 @@ uvicorn
 networkx
 shapely
 pandas
-osmnx
 python-multipart
 geopy
 pytest
