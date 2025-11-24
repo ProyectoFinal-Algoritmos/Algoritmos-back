@@ -1,0 +1,10 @@
+# Ignorar entorno virtual
+venv/
+
+# Archivos de Python compilados
+__pycache__/
+*.pyc
+
+# Configuración de editor
+.vscode/
+.idea/
